@@ -1,68 +1,76 @@
-namespace RotatedSurfaceCode {
-  import Std.Diagnostics.DumpMachine;
-  import Std.Convert.IntAsDouble;
-  import Std.Convert.DoubleAsStringWithPrecision;
-  import Std.Diagnostics.DumpRegister;
-  import SurfaceCode.MeasureXStabilizers;
+import Std.ResourceEstimation.MeasurementCount;
+import Std.Arrays.ForEach;
+import Std.Diagnostics.ConfigurePauliNoise;
+
+import Std.Diagnostics.DumpMachine;
+import Std.Convert.IntAsDouble;
+import Std.Convert.DoubleAsStringWithPrecision;
+import Std.Diagnostics.DumpRegister;
+import SurfaceCode.MeasureXStabilizers;
+
   function validIndex(d: Int, index:Int): Bool {
     if 0 <= index and index < d*d {
       return true;
     }
     return false;
   }
-  operation XStabilizer(d: Int, indexes: Int[], dataQubits: Qubit[]): Result {
-    use q=  Qubit();
+
+operation MeasureLogicalZ(d: Int, dataQubits: Qubit[]): Result {
+    // Logical Z is assumed to be a product of physical Zs on a vertical line
+    // Choose the first column: index i*d for i in 0..d-1
+    let results = MeasureEachZ(dataQubits);
+    mutable parity = Zero;
+    
+    for res in results {
+        if res == One {
+            set parity = if (parity == Zero) { One } else { Zero };
+        }
+    }
+    return parity;
+}
+
+  operation XStabilizer(indexes: Int[], dataQubits: Qubit[], q: Qubit): Unit {
+    Reset(q);
     H(q);
     for index in indexes {
-      if (validIndex(d, index)) {
+      // if (validIndex(d, index)) {
         CX(q, dataQubits[index]);
-      }
+      // }
     }
     H(q);
-    let result = Measure([PauliZ], [q]);
-    Reset(q);
-    return result;
   }
-  operation ZStabilizer(d: Int, indexes: Int[], dataQubits: Qubit[]): Result {
-    use q=  Qubit();
+
+  operation ZStabilizer(indexes: Int[], dataQubits: Qubit[], q:Qubit): Unit {
+    Reset(q);
     for index in indexes {
-      if (validIndex(d, index)) {
+      // if (validIndex(d, index)) {
         CX( dataQubits[index], q);
-      }
+      // }
     }
-    let result = Measure([PauliZ], [q]);
-    Reset(q);
-    return result;
   }
 
-operation GenerateLattice(d: Int, qubits: Qubit[]): (Int[][], Result[], Int[][], Result[]) {
-  let TOTAL_DATA_QUBITS = d*d;
-  mutable xMeasures = [];
-  mutable xMaps = [];
-  mutable zMaps = [];
-  mutable zMeasures = [];
-  mutable isZ = true;
 
-  for i in 0..d-2 {
+  operation GetMaps(d: Int): (Int[][], Int[][]) {
+    let TOTAL_DATA_QUBITS = d*d;
+    mutable xMaps = [];
+    mutable zMaps = [];
+    mutable isZ = true;
+    for i in 0..d-2 {
     for j in 0..d-2 {
       let id = (i*d)+j;
       if (i == 0)  and (j % 2 == 0) {
         let indexes = [id, id+1];
-        xMeasures += [XStabilizer(d, indexes, qubits)];
         xMaps += [indexes];
       }
       if (i%2 == 1)  and (j == 0) {
         let indexes = [id, id+d];
-        zMeasures += [ZStabilizer(d, indexes, qubits)];
         zMaps += [indexes];
       }
 
       let indexes = [id, id+1, id+d, id+d+1];
       if (isZ) {
-        zMeasures += [ZStabilizer(d, indexes, qubits)];
         zMaps += [indexes];
       } else {
-        xMeasures += [XStabilizer(d, indexes, qubits)];
         xMaps += [indexes];
       }
       
@@ -73,18 +81,28 @@ operation GenerateLattice(d: Int, qubits: Qubit[]): (Int[][], Result[], Int[][],
 
       if (j == d-2)  and (i % 2 == 0) {
         let indexes = [id+1, id+d+1];
-        zMeasures += [ZStabilizer(d, indexes , qubits)];
         zMaps += [indexes];
-      }
-      if (i == d-2)  and (j % 2 == 1) {
-        let indexes = [id+d, id+d+1];
-        xMeasures += [XStabilizer(d, indexes, qubits)];
-        xMaps += [indexes];
       }
     }
   }
-  return (xMaps, xMeasures, zMaps, zMeasures);
+  for j in 0..d-2 {
+    if (j % 2 == 1) {
+        let id = ((d-1)*d)+j;
+        let indexes = [id, id+1];
+        xMaps += [indexes];
+      }
   }
+  return (xMaps, zMaps);
+  }
+
+operation GenerateLattice(xMaps: Int[][], zMaps: Int[][], qubits: Qubit[], ancillaX: Qubit[], ancillaZ: Qubit[]): Unit {
+  for i in 0..Length(xMaps)-1 {
+    XStabilizer(xMaps[i], qubits, ancillaX[i]);
+  }
+  for j in 0..Length(xMaps)-1 {
+    ZStabilizer(zMaps[j], qubits, ancillaZ[j]);
+  }
+}
 
 operation GetSyndroem(initX: Result[], currX:Result[], initZ: Result[], currZ: Result[]): (Bool[], Bool[]) {
   mutable xSyndrome = [];
@@ -104,23 +122,30 @@ operation GetSyndroem(initX: Result[], currX:Result[], initZ: Result[], currZ: R
   return (xSyndrome, zSyndrome);
 }
 
-operation RotatedSurfaceCode(d: Int, r: Int): Unit {
+operation RotatedSurfaceCode(d: Int, r: Int): Result[] {
   let TOTAL_DATA_QUBITS = d*d;
   use qubits = Qubit[TOTAL_DATA_QUBITS];
-  mutable (xMaps, initXMeasures, zMaps, initZMeasures) = GenerateLattice(d, qubits);
-  
-  for i in 0..r-1 {
-    let (x , xMeasures, z, zMeasures)  = GenerateLattice(d, qubits);
-    let (xSyndrome, zSyndrome) = GetSyndroem(initXMeasures, xMeasures, initZMeasures, zMeasures);
-    set initXMeasures = xMeasures;
-    set initZMeasures = zMeasures;
-  }
+  use ancillaX = Qubit[(TOTAL_DATA_QUBITS-1)/2];
+  use ancillaZ = Qubit[(TOTAL_DATA_QUBITS-1)/2];
   
   ResetAll(qubits);
+  // ApplyToEach(X, qubits);
+  let (xMaps, zMaps) = GetMaps(d);
+  GenerateLattice(xMaps, zMaps, qubits, ancillaX, ancillaZ);
+  
+  let measuresX = MeasureEachZ(ancillaX);
+  let measuresZ = MeasureEachZ(ancillaZ);
+  let results = MeasureEachZ(qubits);
+  // printMaps(xMaps, zMaps);
+  ResetAll(qubits);
+  ResetAll(ancillaX);
+  ResetAll(ancillaZ);
+  return measuresX + measuresZ + results;
 }
-operation RunRotated(): Unit {
-  RotatedSurfaceCode(5,5);
+operation RunRotated(): Result[] {
+  return RotatedSurfaceCode(3,5);
 }
+
 
 function printMaps(xMaps: Int[][], zMaps: Int[][]): Unit {
   // Utility to print the maps of surface code
@@ -141,7 +166,7 @@ function printMaps(xMaps: Int[][], zMaps: Int[][]): Unit {
     Message(DoubleAsStringWithPrecision(IntAsDouble(i), 0)+"["+str+"]")
   }
 }
-}
+
 
 
 
