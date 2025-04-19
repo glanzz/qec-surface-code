@@ -6,14 +6,20 @@ import Std.Diagnostics.DumpMachine;
 import Std.Convert.IntAsDouble;
 import Std.Convert.DoubleAsStringWithPrecision;
 import Std.Diagnostics.DumpRegister;
-import SurfaceCode.MeasureXStabilizers;
 
-  function validIndex(d: Int, index:Int): Bool {
-    if 0 <= index and index < d*d {
-      return true;
-    }
-    return false;
+function validIndex(d: Int, index:Int): Bool {
+  if 0 <= index and index < d*d {
+    return true;
   }
+  return false;
+}
+
+operation CorrectDataQubit(qubit: Qubit, theta1: Double, theta2: Double, theta3: Double) : Unit is Adj + Ctl {
+  // Applies the correction of on data qubit as unitary
+    Rz(theta1, qubit);
+    Ry(theta2, qubit);
+    Rz(theta3, qubit);
+}
 
 operation MeasureLogicalZ(d: Int, dataQubits: Qubit[]): Result {
     // Logical Z is assumed to be a product of physical Zs on a vertical line
@@ -26,6 +32,52 @@ operation MeasureLogicalZ(d: Int, dataQubits: Qubit[]): Result {
             set parity = if (parity == Zero) { One } else { Zero };
         }
     }
+    return parity;
+}
+operation MeasureLogicalZTopDown(d: Int, dataQubits: Qubit[]): Result {
+    // Logical Z is assumed to be a product of physical Zs on a vertical line
+    // Choose the first column: index i*d for i in 0..d-1
+    mutable parity = Zero;
+    
+    for i in 0..d-1 {
+        let index = i * d;
+        let res = M(dataQubits[index]);
+        
+        if res == One {
+            set parity = if (parity == Zero) { One } else { Zero };
+        }
+    }
+    return parity;
+}
+
+operation MeasureLogicalZAntiDiagonal(d: Int, dataQubits: Qubit[]): Result {
+    mutable parity = Zero;
+
+    for i in 0..d-1 {
+        let index = i * d + (d - 1 - i); // anti-diagonal index
+        let res = M(dataQubits[index]);
+
+        if res == One {
+            set parity = if (parity == Zero) { One } else { Zero };
+        }
+    }
+
+    return parity;
+}
+
+operation MeasureLogicalZLastRow(d: Int, dataQubits: Qubit[]): Result {
+    mutable parity = Zero;
+    let startIndex = (d - 1) * d;
+
+    for i in 0..d-1 {
+        let index = startIndex + i;
+        let res = M(dataQubits[index]);
+
+        if res == One {
+            set parity = if (parity == Zero) { One } else { Zero };
+        }
+    }
+
     return parity;
 }
 
@@ -50,27 +102,32 @@ operation MeasureLogicalZ(d: Int, dataQubits: Qubit[]): Result {
   }
 
 
-  operation GetMaps(d: Int): (Int[][], Int[][]) {
+  operation GetMaps(d: Int): (Int[][], Int[][], String[]) {
     let TOTAL_DATA_QUBITS = d*d;
     mutable xMaps = [];
     mutable zMaps = [];
+    mutable order = [];
     mutable isZ = true;
     for i in 0..d-2 {
     for j in 0..d-2 {
       let id = (i*d)+j;
       if (i == 0)  and (j % 2 == 0) {
+        order += ["X"];
         let indexes = [id, id+1];
         xMaps += [indexes];
       }
       if (i%2 == 1)  and (j == 0) {
+        order += ["Z"];
         let indexes = [id, id+d];
         zMaps += [indexes];
       }
 
       let indexes = [id, id+1, id+d, id+d+1];
       if (isZ) {
+        order += ["Z"];
         zMaps += [indexes];
       } else {
+        order += ["X"];
         xMaps += [indexes];
       }
       
@@ -80,6 +137,7 @@ operation MeasureLogicalZ(d: Int, dataQubits: Qubit[]): Result {
 
 
       if (j == d-2)  and (i % 2 == 0) {
+        order += ["Z"];
         let indexes = [id+1, id+d+1];
         zMaps += [indexes];
       }
@@ -87,60 +145,74 @@ operation MeasureLogicalZ(d: Int, dataQubits: Qubit[]): Result {
   }
   for j in 0..d-2 {
     if (j % 2 == 1) {
+        order += ["X"];
         let id = ((d-1)*d)+j;
         let indexes = [id, id+1];
         xMaps += [indexes];
       }
   }
-  return (xMaps, zMaps);
+  return (xMaps, zMaps, order);
   }
 
-operation GenerateLattice(xMaps: Int[][], zMaps: Int[][], qubits: Qubit[], ancillaX: Qubit[], ancillaZ: Qubit[]): Unit {
-  for i in 0..Length(xMaps)-1 {
-    XStabilizer(xMaps[i], qubits, ancillaX[i]);
+operation GenerateLattice(xMaps: Int[][], zMaps: Int[][], qubits: Qubit[], ancillaX: Qubit[], ancillaZ: Qubit[], order: String[]): Unit {
+  mutable xi = 0;
+  mutable zi = 0;
+  for o in order {
+    if o == "X" {
+      XStabilizer(xMaps[xi], qubits, ancillaX[xi]);
+      xi += 1;
+    } else {
+      ZStabilizer(zMaps[zi], qubits, ancillaZ[zi]);
+      
+      zi += 1;
+    }
+    
   }
-  for j in 0..Length(xMaps)-1 {
-    ZStabilizer(zMaps[j], qubits, ancillaZ[j]);
-  }
+
 }
 
-operation GetSyndroem(initX: Result[], currX:Result[], initZ: Result[], currZ: Result[]): (Bool[], Bool[]) {
+operation Detector(initX: Result[], currX:Result[], initZ: Result[], currZ: Result[]): (Result[], Result[]) {
   mutable xSyndrome = [];
   mutable zSyndrome = [];
   for i in 0..Length(initX)-1 {
-    xSyndrome += [initX[i] != currX[i]];
-    if xSyndrome[i] {
-      Message("Found X error at " + DoubleAsStringWithPrecision(IntAsDouble(i), 1))
-    }
+    xSyndrome += [initX[i] != currX[i] ? One | Zero];
   }
   for i in 0..Length(initZ)-1 {
-    zSyndrome += [initZ[i] != currZ[i]];
-    if zSyndrome[i] {
-      Message("Found Z error at " + DoubleAsStringWithPrecision(IntAsDouble(i), 1))
-    }
+    zSyndrome += [initZ[i] != currZ[i] ? One | Zero];
   }
   return (xSyndrome, zSyndrome);
 }
 
+
+operation Round(TOTAL_DATA_QUBITS: Int, qubits: Qubit[], xMaps:Int[][], zMaps: Int[][], order: String[]): (Result[], Result[]) {
+  use ancillaX = Qubit[(TOTAL_DATA_QUBITS-1)/2];
+  use ancillaZ = Qubit[(TOTAL_DATA_QUBITS-1)/2];
+  GenerateLattice(xMaps, zMaps, qubits, ancillaX, ancillaZ, order);
+  let measuresZ = MeasureEachZ(ancillaZ);
+  let measuresX = MeasureEachZ(ancillaX);
+  ResetAll(ancillaX);
+  ResetAll(ancillaZ);
+  return (measuresX, measuresZ);
+}
+
+
 operation RotatedSurfaceCode(d: Int, r: Int): Result[] {
   let TOTAL_DATA_QUBITS = d*d;
   use qubits = Qubit[TOTAL_DATA_QUBITS];
-  use ancillaX = Qubit[(TOTAL_DATA_QUBITS-1)/2];
-  use ancillaZ = Qubit[(TOTAL_DATA_QUBITS-1)/2];
+  // ConfigurePauliNoise(0.1, 0.0, 0.0);
   
   ResetAll(qubits);
-  // ApplyToEach(X, qubits);
-  let (xMaps, zMaps) = GetMaps(d);
-  GenerateLattice(xMaps, zMaps, qubits, ancillaX, ancillaZ);
+
+  let (xMaps, zMaps, order) = GetMaps(d);
   
-  let measuresX = MeasureEachZ(ancillaX);
-  let measuresZ = MeasureEachZ(ancillaZ);
+  let (syndromeX1, syndromeZ1) = Round(TOTAL_DATA_QUBITS, qubits, xMaps, zMaps, order);
+  let (syndromeX2, syndromeZ2) = Round(TOTAL_DATA_QUBITS, qubits, xMaps, zMaps, order);
+  let (detectionX, detectionZ) = Detector(syndromeX1, syndromeX2, syndromeZ1, syndromeZ2);
   let results = MeasureEachZ(qubits);
-  // printMaps(xMaps, zMaps);
+  
+
   ResetAll(qubits);
-  ResetAll(ancillaX);
-  ResetAll(ancillaZ);
-  return measuresX + measuresZ + results;
+  return detectionX + detectionZ + results;
 }
 operation RunRotated(): Result[] {
   return RotatedSurfaceCode(3,5);
@@ -167,6 +239,14 @@ function printMaps(xMaps: Int[][], zMaps: Int[][]): Unit {
   }
 }
 
+
+function printArray(map: Int[]): Unit {
+  mutable str = "";
+    for val in map {
+      str += DoubleAsStringWithPrecision(IntAsDouble(val), 0) + ",";
+    }
+    Message("["+str+"]");
+}
 
 
 
