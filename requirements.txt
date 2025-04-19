@@ -1,3 +1,7 @@
-qsharp
+qsharp==1.15.0
 pytest
 matplotlib
+qiskit==2.0.0
+matplotlib==3.10.1
+azure-quantum==3.1.0
+networkx
