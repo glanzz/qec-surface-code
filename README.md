@@ -13,11 +13,28 @@ We build a logical qubit, identify errors using error syndromes at each timestep
 ## Workflow
 ![Workflow](/qec-highlevel.png)
 
-# Components
+## Components
 - Surface Code Architecture in Q#
 - Pauli Tracking Layer for syndrome measurements history
 - Error detection at each timestep using Minimum-weight perfect matching decoder with error graphs
 - Error correction on logical qubits
+
+
+## Setup
+- Clone repository
+- Setup virtual environment in python
+```bash
+python3 -m virtualenv venv
+```
+- Activate venv
+```bash
+source venv/bin/activate
+```
+- Install Requirements
+```bash
+python3 -m pip install -r requirements.txt
+```
+- Run Notebook and choose *venv*
 
 
 
