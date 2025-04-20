@@ -34,8 +34,9 @@ source venv/bin/activate
 ```bash
 python3 -m pip install -r requirements.txt
 ```
-- Run Notebook and choose *venv*
+- Run Notebook and choose *venv* [Start Here](/final.ipynb)
 
-
+## Results
+![Result](/logical_vs_physical_error_rates.png)
 
 
