@@ -1,5 +1,4 @@
 qsharp==1.15.0
-pytest
 matplotlib
 qiskit==2.0.0
 matplotlib==3.10.1
